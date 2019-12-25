@@ -187,15 +187,29 @@ class BikeData(object):
         '''
         day_totals = self.daily_totals
         grouped_by_month = day_totals.groupby(
-            ['month','year'])[['total']].mean().rename(columns={'total':'total_crossings_mean'}
+            ['month','year'])[['total']].sum().rename(columns={'total':'total_crossings'}
             )
         grouped_by_month['month_name'] = grouped_by_month.index.get_level_values(0).map(lambda x:calendar.month_name[x]) 
         return grouped_by_month
 
 
     def make_weekday_plot(self):
+        '''
+        plot one bar per weekday in each year
+        '''
         years = sorted(self.grouped_by_weekday.reset_index()['year'].unique())
         self.weekday_plot = pf.make_weekday_plot(
             self.grouped_by_weekday,
+            palette = [self.yearly_palette_dict[year] for year in years]
+        )
+
+
+    def make_monthly_plot(self):
+        '''
+        plot one bar per month in each year
+        '''
+        years = sorted(self.grouped_by_weekday.reset_index()['year'].unique())
+        self.monthly_plot = pf.make_monthly_plot(
+            self.grouped_by_month,
             palette = [self.yearly_palette_dict[year] for year in years]
         )
