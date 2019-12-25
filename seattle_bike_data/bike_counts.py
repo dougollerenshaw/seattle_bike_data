@@ -1,5 +1,10 @@
 import pandas as pd
+import seaborn as sns
+import calendar
+import datetime
 from sodapy import Socrata
+
+from . import plotting_functions as pf
 
 
 class BikeData(object):
@@ -8,11 +13,25 @@ class BikeData(object):
 
         self.location = location
 
-        self.crossings = self.get_crossings()
+        # get total counts at various levels of granularity
+        self.hourly_totals = self._get_hourly_totals()
+        self.daily_totals = self._get_daily_totals()
+        self.grouped_by_weekday = self._group_by_weekday()
+        self.grouped_by_month = self._group_by_month()
 
-    def get_crossings(self):
+        # define palettes
+        self.weekday_palette = sns.color_palette("viridis", 7)
+        self.monthly_palette = sns.color_palette("rainbow", 12)
+        self.yearly_palette = sns.color_palette("Dark2", datetime.datetime.now().year - 2012 + 1)
+        years = range(2012,datetime.datetime.now().year+1)
+        self.yearly_palette_dict = {year:color for year,color in zip(years,self.yearly_palette)}
+
+
+    def _get_hourly_totals(self):
         '''
         get crossings from data.seattle.gov
+
+        they are delivered in an hourly format
         '''
         # rename the various total columns to 'total'
         total_translator = {
@@ -41,8 +60,8 @@ class BikeData(object):
         hourly_totals['date'] = pd.to_datetime(hourly_totals['date'])
 
         # convert every other column to integers
-        total_cols = [c for c in hourly_totals.columns if c != 'date']
-        for col in total_cols:
+        self._total_cols = [c for c in hourly_totals.columns if c != 'date']
+        for col in self._total_cols:
             hourly_totals[col] = hourly_totals[col].astype(int)
 
         # Add columns for weekday, hour, month, day of week and day of year
@@ -65,15 +84,21 @@ class BikeData(object):
         hourly_totals = hourly_totals.sort_values(by='date')
         hourly_totals.set_index(['year', 'dayofyear', 'hour'], inplace=True)
 
-        # get day totals
-        daily_totals = hourly_totals.groupby(['year', 'dayofyear'])[
-            total_cols].sum()
+        return hourly_totals
+
+    def _get_daily_totals(self):
+        '''
+        get daily totals from hourly totals
+        '''
+        daily_totals = self.hourly_totals.groupby(
+            ['year', 'dayofyear']
+        )[self._total_cols].sum()
         # in order for the merge to work, there needs to be a single matching hour index. Make it zero
         daily_totals['hour'] = 0
         daily_totals.set_index(['hour'], append=True, inplace=True)
 
         daily_totals = daily_totals.merge(
-            hourly_totals[['weekday', 'day_name', 'day',
+            self.hourly_totals[['weekday', 'day_name', 'day',
                            'date', 'month', 'dayofyear_float']],
             left_index=True,
             right_index=True,
@@ -82,13 +107,11 @@ class BikeData(object):
 
         # fix days with broken counter for spokane st bridge
         if self.location == 'spokane street bridge':
-            daily_totals = self.fix_days_with_broken_counter(daily_totals)
+            daily_totals = self._fix_days_with_broken_counter(daily_totals)
 
-        # make hourly and daily totals into attributes
-        self.hourly_totals = hourly_totals
-        self.daily_totals = daily_totals
+        return daily_totals
 
-    def fix_days_with_broken_counter(self, daily_totals):
+    def _fix_days_with_broken_counter(self, daily_totals):
         '''
         copper thieves took down the Spokane St counter twice in late 2018/early 2019 
         (https://westseattlebikeconnections.org/2019/01/03/actual-bike-counts-up-in-2018/). 
@@ -117,9 +140,9 @@ class BikeData(object):
             for year in [year for year in daily_totals.reset_index().year.unique() if year < current_year]:
                 matches.append(
                     find_nearest_matching_day(
-                        daily_totals, 
-                        day_of_year, 
-                        row['weekday'], 
+                        daily_totals,
+                        day_of_year,
+                        row['weekday'],
                         year
                     )
                 )
@@ -133,3 +156,46 @@ class BikeData(object):
                 matches[['total']].median().values)
 
         return daily_totals
+
+    def _group_by_weekday(self):
+        '''
+        group by day of week for each year
+        '''
+        day_totals = self.daily_totals
+        grouped_by_weekday = day_totals.groupby(
+            ['weekday', 'year'])[['total']].mean().rename(columns={'total': 'total_crossings_mean'}
+                                                          )
+        grouped_by_weekday['day_name'] = (grouped_by_weekday
+                                          .index.get_level_values(0)
+                                          .map(lambda x: calendar.day_name[x])
+                                          )
+        grouped_by_weekday = grouped_by_weekday.merge(
+            (day_totals
+                .groupby(['weekday', 'year'])[['total']]
+                .std()
+                .rename(columns={'total': 'total_crossings_std'})
+             ),
+            left_index=True,
+            right_index=True
+        )
+
+        return grouped_by_weekday
+
+    def _group_by_month(self):
+        '''
+        group by month for each year
+        '''
+        day_totals = self.daily_totals
+        grouped_by_month = day_totals.groupby(
+            ['month','year'])[['total']].mean().rename(columns={'total':'total_crossings_mean'}
+            )
+        grouped_by_month['month_name'] = grouped_by_month.index.get_level_values(0).map(lambda x:calendar.month_name[x]) 
+        return grouped_by_month
+
+
+    def make_weekday_plot(self):
+        years = sorted(self.grouped_by_weekday.reset_index()['year'].unique())
+        self.weekday_plot = pf.make_weekday_plot(
+            self.grouped_by_weekday,
+            palette = [self.yearly_palette_dict[year] for year in years]
+        )
