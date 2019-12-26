@@ -130,3 +130,5 @@ dmypy.json
 
 # cache
 *cache*
+
+.DS_Store
